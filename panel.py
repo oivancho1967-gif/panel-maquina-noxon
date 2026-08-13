@@ -12,9 +12,9 @@ st.markdown("---")
 
 # 2. Conexión segura a Firebase (Evita conectarse dos veces)
 if not firebase_admin._apps:
-    # Aquí usamos la llave maestra que descargaste
-    import json
-    import streamlit as st
+    # Aqui usamos la llave maestra que descargaste
+    cred_dict = json.loads(st.secrets["firebase"]["json_content"])
+    cred = credentials.Certificate(cred_dict)
     firebase_admin.initialize_app(cred, {
         'databaseURL': 'https://seguimiento-robot-eps32-default-rtdb.firebaseio.com/'
     })
