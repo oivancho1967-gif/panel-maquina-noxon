@@ -1,19 +1,22 @@
 import streamlit as st
 import json
-import firebase_admin
-from firebase_admin import credentials
-from firebase_admin import db
 import pandas as pd
+import firebase_admin
+from firebase_admin import credentials, db
 
 # 1. Configuración visual básica de la página
 st.set_page_config(page_title="Monitor de Máquina", page_icon="⚙️", layout="wide")
-st.title("⚙️ Panel de Control - Rendimiento de la Máquina")
+st.title("⚙️ Panel de Control - Rendimiento Máquina Noxon")
 st.markdown("---")
 
 # 2. Conexión segura a Firebase (Evita conectarse dos veces)
 if not firebase_admin._apps:
-    # Aqui usamos la llave maestra que descargaste
+    # Leer las llaves desde la caja fuerte de Streamlit (Secrets)
     cred_dict = json.loads(st.secrets["firebase"]["json_content"])
+    
+    # Reparar los saltos de linea para que Streamlit no deforme la llave
+    cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
+    
     cred = credentials.Certificate(cred_dict)
     firebase_admin.initialize_app(cred, {
         'databaseURL': 'https://seguimiento-robot-eps32-default-rtdb.firebaseio.com/'
@@ -25,36 +28,51 @@ datos_crudos = nodo_registros.get()
 
 # 4. Procesar y organizar la información
 if datos_crudos:
-    total_ciclos = 0
-    total_segundos = 0
-    
-    # Recorremos la base de datos separando los lotes del brazo y el horómetro
-    for push_id, info in datos_crudos.items():
-        evento = info.get('evento', '')
-        valor = info.get('valor', 0)
+    # Convertir el diccionario de Firebase a una lista para Pandas
+    lista_datos = []
+    for key, value in datos_crudos.items():
+        value['id_firebase'] = key
+        lista_datos.append(value)
         
-        # OJO: Aquí le decimos que también sume los ciclos individuales viejos 
-        # y los lotes nuevos de 10 para no perder el historial
-        if evento == "lote_10_ciclos" or evento == "ciclo_completado":
-            total_ciclos += valor
-        elif evento == "carga_finalizada":
-            total_segundos += valor
-            
-    # Calculamos horas, minutos y segundos para que sea fácil de leer
-    horas = int(total_segundos // 3600)
-    minutos = int((total_segundos % 3600) // 60)
+    df = pd.DataFrame(lista_datos)
     
-    # 5. Dibujar los indicadores visuales en la pantalla
-    col1, col2 = st.columns(2)
+    st.subheader("📊 Resumen de Producción")
     
-    with col1:
-        st.metric(label="🔄 Ciclos Totales Completados", value=f"{total_ciclos} ciclos")
+    # Verificar si ya hay reportes de palets Noxon
+    if 'evento' in df.columns and 'reporte_palet_noxon' in df['evento'].values:
+        df_noxon = df[df['evento'] == 'reporte_palet_noxon']
         
-    with col2:
-        st.metric(label="⏱️ Tiempo Total de Operación", value=f"{horas}h {minutos}m")
+        # Cálculos totales
+        total_palets = df_noxon['ciclo_num'].max()
+        total_film = df_noxon['film_gastado_m'].sum()
+        total_vueltas = df_noxon['vueltas'].sum()
         
-    st.success("¡Conexión en tiempo real establecida correctamente!")
+        # Mostrar métricas en columnas
+        col1, col2, col3 = st.columns(3)
+        col1.metric("📦 Palets Envueltos (Total)", int(total_palets))
+        col2.metric("📏 Film Gastado (Metros)", f"{total_film:.2f}")
+        col3.metric("🔄 Vueltas del Brazo", int(total_vueltas))
+        
+        st.markdown("### 📋 Historial de Palets")
+        st.dataframe(df_noxon[['ciclo_num', 'vueltas', 'metros_recorridos', 'film_gastado_m']])
+    else:
+        st.info("Esperando a que la máquina termine el primer palet para mostrar métricas de film...")
+
+    st.markdown("---")
+    st.subheader("⚡ Tiempos de Energía y Batería")
+    
+    # Cálculos de tiempo
+    if 'evento' in df.columns:
+        df_trabajo = df[df['evento'] == 'tiempo_trabajo_segundos']
+        df_carga = df[df['evento'] == 'tiempo_carga_segundos']
+        
+        # Sumar los segundos y pasar a minutos
+        minutos_trabajo = df_trabajo['valor'].sum() / 60 if not df_trabajo.empty else 0
+        minutos_carga = df_carga['valor'].sum() / 60 if not df_carga.empty else 0
+        
+        col_t1, col_t2 = st.columns(2)
+        col_t1.metric("🚜 Tiempo Trabajando (Minutos)", f"{minutos_trabajo:.1f}")
+        col_t2.metric("🔌 Tiempo Cargando (Minutos)", f"{minutos_carga:.1f}")
 
 else:
-    st.warning("Aún no hay datos legibles en la base de datos. ¡Pon a trabajar la máquina!")
-
+    st.warning("No hay datos en la base de datos todavía. ¡Enciende la máquina y conecta el ESP32 para comenzar!")
